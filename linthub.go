@@ -24,13 +24,30 @@ import (
 
 var (
 	personalAccessTokenFile = flag.String("personal_access_token_file", filepath.Join(os.Getenv("HOME"), ".linthub-token"), "a file to load a GitHub personal access token from")
+	rev = flag.String("rev", "master", "revision of the repo to check")
 )
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: linthub [options] owner/repo")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
-	var httpClient *http.Client
+	if flag.NArg() != 1 {
+		flag.Usage()
+		os.Exit(1)
+	}
+	parts := strings.Split(flag.Arg(0), "/")
+	if len(parts) != 2 {
+		flag.Usage()
+		os.Exit(1)
+	}
+	owner, repo := parts[0], parts[1]
 
+	// Either load the personal access token (and set httpClient accordingly),
+	// or leave httpClient as nil to get an unauthenticated client.
+	var httpClient *http.Client
 	pat, err := ioutil.ReadFile(*personalAccessTokenFile)
 	if err == nil {
 		// security check
@@ -53,17 +70,12 @@ func main() {
 	client := github.NewClient(httpClient)
 	client.UserAgent = "linthub"
 
-	const (
-		owner, repo = "golang", "lint"
-		rev         = "master"
-	)
-
-	commit, _, err := client.Repositories.GetCommit(owner, repo, rev)
+	commit, _, err := client.Repositories.GetCommit(owner, repo, *rev)
 	if err != nil {
-		log.Fatalf("client.Repositories.GetCommit: %v", err)
+		log.Fatalf("GetCommit(%q, %q, %q): %v", owner, repo, *rev, err)
 	}
 	sha1 := *commit.SHA
-	log.Printf("%s/%s: rev %q is %s", owner, repo, rev, sha1)
+	log.Printf("%s/%s: rev %q is %s", owner, repo, *rev, sha1)
 
 	tree, _, err := client.Git.GetTree(owner, repo, sha1, true)
 	if err != nil {
