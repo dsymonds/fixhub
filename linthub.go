@@ -27,6 +27,10 @@ var (
 	rev                     = flag.String("rev", "master", "revision of the repo to check")
 )
 
+const (
+	sizeLimit = 1 << 20 // 1 MB
+)
+
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: linthub [options] owner/repo")
@@ -107,8 +111,8 @@ func main() {
 		if !strings.HasSuffix(path, ".go") {
 			continue
 		}
-		if size > 100<<10 {
-			log.Printf("Skipping %s because it is too big: %d > %d", path, size, 100<<10)
+		if size > sizeLimit {
+			log.Printf("Skipping %s because it is too big: %d > %d", path, size, sizeLimit)
 			continue
 		}
 		//log.Printf("+ %s (%d bytes)", path, size)
