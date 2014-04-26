@@ -9,6 +9,9 @@ To install, run
 ```
 
 Invoke linthub with a GitHub repo name (e.g. `dsymonds/linthub`).
+```
+   linthub golang/lint
+```
 
 You might need a _personal access token_ to avoid getting rate limited.
 Visit https://github.com/settings/applications and create one
