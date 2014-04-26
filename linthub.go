@@ -4,6 +4,7 @@ Linthub runs golint on a GitHub repository.
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"flag"
 	"fmt"
@@ -43,7 +44,7 @@ func main() {
 
 		tr := &oauth.Transport{
 			Token: &oauth.Token{
-				AccessToken: string(pat),
+				AccessToken: string(bytes.TrimSpace(pat)),
 			},
 		}
 		httpClient = tr.Client()
