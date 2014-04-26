@@ -24,7 +24,7 @@ import (
 
 var (
 	personalAccessTokenFile = flag.String("personal_access_token_file", filepath.Join(os.Getenv("HOME"), ".linthub-token"), "a file to load a GitHub personal access token from")
-	rev = flag.String("rev", "master", "revision of the repo to check")
+	rev                     = flag.String("rev", "master", "revision of the repo to check")
 )
 
 func main() {
@@ -55,7 +55,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("os.Stat(%q): %v", *personalAccessTokenFile, err)
 		}
-		if fi.Mode() & 0077 != 0 { // check that no group/world perm bits are set
+		if fi.Mode()&0077 != 0 { // check that no group/world perm bits are set
 			log.Fatalf("%s is too accessible; run `chmod go= %s` to fix", *personalAccessTokenFile, *personalAccessTokenFile)
 		}
 
