@@ -1,5 +1,5 @@
 /*
-Linthub runs golint on a GitHub repository.
+Fixhub runs golint on a GitHub repository.
 */
 package main
 
@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	personalAccessTokenFile = flag.String("personal_access_token_file", filepath.Join(os.Getenv("HOME"), ".linthub-token"), "a file to load a GitHub personal access token from")
+	personalAccessTokenFile = flag.String("personal_access_token_file", filepath.Join(os.Getenv("HOME"), ".fixhub-token"), "a file to load a GitHub personal access token from")
 	rev                     = flag.String("rev", "master", "revision of the repo to check")
 )
 
@@ -33,7 +33,7 @@ const (
 
 func main() {
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: linthub [options] owner/repo")
+		fmt.Fprintln(os.Stderr, "usage: fixhub [options] owner/repo")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -72,7 +72,7 @@ func main() {
 	}
 
 	client := github.NewClient(httpClient)
-	client.UserAgent = "linthub"
+	client.UserAgent = "fixhub"
 
 	commit, _, err := client.Repositories.GetCommit(owner, repo, *rev)
 	if err != nil {
