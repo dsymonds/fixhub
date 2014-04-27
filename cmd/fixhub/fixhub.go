@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dsymonds/fixhub/fixhub"
+	"github.com/dsymonds/fixhub"
 	"github.com/golang/lint"
 )
 
