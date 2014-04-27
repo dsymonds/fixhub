@@ -1,5 +1,5 @@
 /*
-Fixhub runs golint on a GitHub repository.
+Fixhub tries to fix a GitHub repository containing Go source files.
 */
 package main
 
