@@ -5,21 +5,18 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 
-	"code.google.com/p/goauth2/oauth"
+	"github.com/dsymonds/fixhub/fixhub"
 	"github.com/golang/lint"
-	"github.com/google/go-github/github"
 )
 
 var (
@@ -49,11 +46,8 @@ func main() {
 	}
 	owner, repo := parts[0], parts[1]
 
-	// Either load the personal access token (and set httpClient accordingly),
-	// or leave httpClient as nil to get an unauthenticated client.
-	var httpClient *http.Client
-	pat, err := ioutil.ReadFile(*personalAccessTokenFile)
-	if err == nil {
+	var accessToken string
+	if pat, err := ioutil.ReadFile(*personalAccessTokenFile); err == nil {
 		// security check
 		fi, err := os.Stat(*personalAccessTokenFile)
 		if err != nil {
@@ -63,29 +57,25 @@ func main() {
 			log.Fatalf("%s is too accessible; run `chmod go= %s` to fix", *personalAccessTokenFile, *personalAccessTokenFile)
 		}
 
-		tr := &oauth.Transport{
-			Token: &oauth.Token{
-				AccessToken: string(bytes.TrimSpace(pat)),
-			},
-		}
-		httpClient = tr.Client()
+		accessToken = string(bytes.TrimSpace(pat))
 	}
 
-	client := github.NewClient(httpClient)
-	client.UserAgent = "fixhub"
-
-	commit, _, err := client.Repositories.GetCommit(owner, repo, *rev)
+	client, err := fixhub.NewClient(owner, repo, accessToken)
 	if err != nil {
-		log.Fatalf("GetCommit(%q, %q, %q): %v", owner, repo, *rev, err)
+		log.Fatal(err)
 	}
-	sha1 := *commit.SHA
-	log.Printf("%s/%s: rev %q is %s", owner, repo, *rev, sha1)
 
-	tree, _, err := client.Git.GetTree(owner, repo, sha1, true)
+	ref, err := client.ResolveRef(*rev)
+	if err != nil {
+		log.Fatalf("GetCommit(%q): %v", *rev, err)
+	}
+	log.Printf("rev %q is %s", *rev, ref)
+
+	tree, err := client.GetTree(ref)
 	if err != nil {
 		log.Fatalf("GetTree: %v", err)
 	}
-	log.Printf("%s/%s: found %d tree entries", owner, repo, len(tree.Entries))
+	log.Printf("Found %d tree entries", len(tree.Entries))
 
 	var (
 		linter = new(lint.Linter)
@@ -122,7 +112,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 
-			src, err := getBlob(client, owner, repo, sha1)
+			src, err := client.GetBlob(sha1)
 			if err != nil {
 				log.Printf("Getting blob for %s: %v", path, err)
 				return
@@ -147,18 +137,4 @@ func main() {
 		fmt.Println(p)
 	}
 	log.Printf("wow, there were %d problems in %d Go source files!", len(problems.list), nGo)
-}
-
-func getBlob(client *github.Client, owner, repo, sha1 string) ([]byte, error) {
-	blob, _, err := client.Git.GetBlob(owner, repo, sha1)
-	if err != nil {
-		return nil, err
-	}
-	content := *blob.Content
-	switch *blob.Encoding {
-	case "base64":
-		return base64.StdEncoding.DecodeString(content)
-	default:
-		return nil, fmt.Errorf("unknown blob encoding %q", *blob.Encoding)
-	}
 }

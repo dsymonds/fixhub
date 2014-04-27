@@ -5,7 +5,7 @@ Fixhub runs golint on a GitHub repository.
 
 To install, run
 ```
-   go get github.com/dsymonds/fixhub
+   go get github.com/dsymonds/fixhub/cmd/fixhub
 ```
 
 Invoke fixhub with a GitHub repo name (e.g. `dsymonds/fixhub`).
