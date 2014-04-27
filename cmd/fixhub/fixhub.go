@@ -101,6 +101,9 @@ func main() {
 		if !strings.HasSuffix(path, ".go") {
 			continue
 		}
+		if strings.HasSuffix(path, ".pb.go") {
+			continue
+		}
 		if size > sizeLimit {
 			log.Printf("Skipping %s because it is too big: %d > %d", path, size, sizeLimit)
 			continue
