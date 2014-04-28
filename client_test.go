@@ -1,7 +1,6 @@
 package fixhub
 
 import (
-	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
@@ -19,42 +18,24 @@ import (
 	"github.com/google/go-github/github"
 )
 
-// NOTE(dsymonds): This test is a bit pointless since it mainly tests the
-// go-github package, but it exercises the fake and it will be more interesting
-// when the client itself does linting and vetting.
-
 func TestBasic(t *testing.T) {
 	c, cleanup := newFakeClient(t)
 	defer cleanup()
 
-	master, err := c.ResolveRef("master")
+	ps, err := c.Check("master")
 	if err != nil {
-		t.Fatalf("ResolveRef: %v", err)
+		t.Fatalf("Check: %v", err)
 	}
-
-	tree, err := c.GetTree(master)
-	if err != nil {
-		t.Fatalf("GetTree: %v", err)
+	if len(ps) < 1 {
+		t.Fatalf("Didn't find any problems")
 	}
-
-	// Find "p1.go" and check we can get its contents.
-	var sha1 string
-	for _, ent := range tree.Entries {
-		if *ent.Path == "p1.go" {
-			sha1 = *ent.SHA
-			break
-		}
+	if got, want := ps[0].File, "p1.go"; got != want {
+		t.Errorf("Problem found in %q, want %q", got, want)
 	}
-	if sha1 == "" {
-		t.Fatal("Didn't find p1.go")
+	if got, want := ps[0].Line, 1; got != want {
+		t.Errorf("Problem found at line %d, want %d", got, want)
 	}
-	data, err := c.GetBlob(sha1)
-	if err != nil {
-		t.Fatalf("GetBlob: %v", err)
-	}
-	if !bytes.Contains(data, []byte("package proj")) {
-		t.Fatalf("Bad blob: %q", data)
-	}
+	// TODO: check ps[0].Text?
 }
 
 func newFakeClient(t *testing.T) (client *Client, cleanup func()) {

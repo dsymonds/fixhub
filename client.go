@@ -96,6 +96,8 @@ func (p Problem) String() string {
 	return fmt.Sprintf("%s:%d: %s", p.File, p.Line, p.Text)
 }
 
+// Problems is a slice of Problem.
+// It satisfies sort.Interface.
 type Problems []Problem
 
 func (ps Problems) Len() int      { return len(ps) }
