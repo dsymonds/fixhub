@@ -8,15 +8,25 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 
 	"code.google.com/p/goauth2/oauth"
+	"github.com/golang/lint"
 	"github.com/google/go-github/github"
+)
+
+const (
+	// sizeLimit is the largest file to fetch.
+	sizeLimit = 1 << 20 // 1 MB
 )
 
 // Client is a client for interacting with GitHub repositories.
 type Client struct {
 	gc          *github.Client
 	owner, repo string
+
+	FetchParallelism int // max fetches to do at once in an operation
 }
 
 // NewClient returns a new client.
@@ -40,6 +50,8 @@ func NewClient(owner, repo, accessToken string) (*Client, error) {
 		gc:    gc,
 		owner: owner,
 		repo:  repo,
+
+		FetchParallelism: 10,
 	}, nil
 }
 
@@ -71,4 +83,106 @@ func (c *Client) GetBlob(sha1 string) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unknown blob encoding %q", *blob.Encoding)
 	}
+}
+
+// A Problem is something that was found wrong.
+type Problem struct {
+	File string
+	Line int
+	Text string // the prose that describes the problem
+}
+
+func (p Problem) String() string {
+	return fmt.Sprintf("%s:%d: %s", p.File, p.Line, p.Text)
+}
+
+type Problems []Problem
+
+func (ps Problems) Len() int      { return len(ps) }
+func (ps Problems) Swap(i, j int) { ps[i], ps[j] = ps[j], ps[i] }
+func (ps Problems) Less(i, j int) bool {
+	if a, b := ps[i].File, ps[j].File; a != b {
+		return a < b
+	}
+	return ps[i].Line < ps[j].Line // assume no more than one problem per line
+}
+
+// Check runs checks on the Go source files at the named revision.
+func (c *Client) Check(rev string) (Problems, error) {
+	ref, err := c.ResolveRef(rev) // TODO: skip this if it looks like a SHA-1 hash
+	if err != nil {
+		return nil, fmt.Errorf("resolving %q: %v", rev, err)
+	}
+	tree, err := c.GetTree(ref)
+	if err != nil {
+		return nil, fmt.Errorf("fetching tree %q (%s): %v", rev, ref, err)
+	}
+
+	// TODO: do more than lint
+
+	var (
+		linter = new(lint.Linter)
+		sem    = make(chan int, c.FetchParallelism)
+
+		wg       sync.WaitGroup
+		problems struct {
+			sync.Mutex
+			list []Problem
+		}
+	)
+	addProblem := func(p Problem) {
+		problems.Lock()
+		problems.list = append(problems.list, p)
+		problems.Unlock()
+	}
+
+	for _, ent := range tree.Entries {
+		if ent.SHA == nil || ent.Path == nil || ent.Size == nil {
+			continue
+		}
+		sha1, path, size := *ent.SHA, *ent.Path, *ent.Size
+		if !strings.HasSuffix(path, ".go") {
+			continue
+		}
+		if strings.HasSuffix(path, ".pb.go") {
+			continue
+		}
+		if size > sizeLimit {
+			//log.Printf("Skipping %s because it is too big: %d > %d", path, size, sizeLimit)
+			continue
+		}
+		//log.Printf("+ %s (%d bytes)", path, size)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			// TODO: figure out how to do error reporting in here
+
+			sem <- 1
+			src, err := c.GetBlob(sha1)
+			<-sem
+			if err != nil {
+				//log.Printf("Getting blob for %s: %v", path, err)
+				return
+			}
+			ps, err := linter.Lint(path, src)
+			if err != nil {
+				//log.Printf("Linting %s: %v", path, err)
+				return
+			}
+			for _, p := range ps {
+				if p.Confidence < 0.8 { // TODO: flag
+					continue
+				}
+				addProblem(Problem{
+					File: path,
+					Line: p.Position.Line,
+					Text: p.Text,
+				})
+			}
+		}()
+	}
+	wg.Wait()
+	return problems.list, nil
 }
