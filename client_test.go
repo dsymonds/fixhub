@@ -26,16 +26,24 @@ func TestBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if len(ps) < 1 {
-		t.Fatalf("Didn't find any problems")
+	if len(ps) < 3 {
+		t.Fatalf("Didn't find enough problems")
 	}
-	if got, want := ps[0].File, "p1.go"; got != want {
+	if got, want := ps[0].Text, "This file needs formatting with gofmt."; got != want {
+		t.Errorf("ps[0].Text = %q, want %q", ps[0].Text, want)
+	}
+	if got, want := ps[1].File, "p1.go"; got != want {
 		t.Errorf("Problem found in %q, want %q", got, want)
 	}
-	if got, want := ps[0].Line, 1; got != want {
+	if got, want := ps[1].Line, 1; got != want {
 		t.Errorf("Problem found at line %d, want %d", got, want)
 	}
-	// TODO: check ps[0].Text?
+	if !strings.Contains(ps[3].Text, "expected '}'") {
+		t.Errorf("ps[3].Text=%q, want it to mention missing closing brace", ps[3].Text)
+	}
+	if got, want := ps[3].Line, 3; got != want {
+		t.Errorf("Problem found at line %d, want %d", got, want)
+	}
 }
 
 func newFakeClient(t *testing.T) (client *Client, cleanup func()) {

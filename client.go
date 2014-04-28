@@ -5,9 +5,13 @@ containing Go source files, and generating fixes for the problems.
 package fixhub
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
+	"go/format"
+	"go/scanner"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 
@@ -88,7 +92,7 @@ func (c *Client) GetBlob(sha1 string) ([]byte, error) {
 // A Problem is something that was found wrong.
 type Problem struct {
 	File string
-	Line int
+	Line int    // line number, starting at 1
 	Text string // the prose that describes the problem
 }
 
@@ -106,7 +110,10 @@ func (ps Problems) Less(i, j int) bool {
 	if a, b := ps[i].File, ps[j].File; a != b {
 		return a < b
 	}
-	return ps[i].Line < ps[j].Line // assume no more than one problem per line
+	if a, b := ps[i].Line, ps[j].Line; a != b {
+		return a < b
+	}
+	return ps[i].Text < ps[j].Text
 }
 
 // Check runs checks on the Go source files at the named revision.
@@ -136,6 +143,13 @@ func (c *Client) Check(rev string) (Problems, error) {
 		problems.Lock()
 		problems.list = append(problems.list, p)
 		problems.Unlock()
+	}
+	addScannerError := func(path string, err *scanner.Error) {
+		addProblem(Problem{
+			File: path,
+			Line: err.Pos.Line,
+			Text: err.Msg,
+		})
 	}
 
 	for _, ent := range tree.Entries {
@@ -168,6 +182,31 @@ func (c *Client) Check(rev string) (Problems, error) {
 				//log.Printf("Getting blob for %s: %v", path, err)
 				return
 			}
+
+			formatted, err := format.Source(src)
+			if err != nil {
+				switch err := err.(type) {
+				case scanner.ErrorList:
+					for _, err := range err {
+						addScannerError(path, err)
+					}
+				case *scanner.Error:
+					addScannerError(path, err)
+				default:
+					addProblem(Problem{
+						File: path,
+						Text: err.Error(),
+					})
+				}
+				return // no more to do if we have syntax errors
+			}
+			if !bytes.Equal(src, formatted) {
+				addProblem(Problem{
+					File: path,
+					Text: "This file needs formatting with gofmt.",
+				})
+			}
+
 			ps, err := linter.Lint(path, src)
 			if err != nil {
 				//log.Printf("Linting %s: %v", path, err)
@@ -186,5 +225,6 @@ func (c *Client) Check(rev string) (Problems, error) {
 		}()
 	}
 	wg.Wait()
+	sort.Sort(Problems(problems.list))
 	return problems.list, nil
 }
