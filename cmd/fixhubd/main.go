@@ -71,6 +71,7 @@ func staticHandler(name, text string) {
 
 type Data struct {
 	Path     string
+	Rev      string
 	Owner    string
 	Repo     string
 	Problems fixhub.Problems
@@ -99,6 +100,7 @@ func fixhubHandler(w http.ResponseWriter, r *http.Request) {
 
 	data := Data{
 		Path:     path,
+		Rev:      *rev,
 		Owner:    owner,
 		Repo:     repo,
 		Problems: ps,
@@ -163,7 +165,17 @@ function goproblems() {
 }
 `
 
-var problemsTmpl = template.Must(template.New("problems.html").Parse(`<!DOCTYPE html>
+func problemLink(d Data, p fixhub.Problem) string {
+	url := "https://" + d.Path + "/blob/" + d.Rev + "/" + p.File
+	if p.Line > 0 {
+		url += fmt.Sprintf("#L%d", p.Line)
+	}
+	return url
+}
+
+var problemsTmpl = template.Must(template.New("problems.html").Funcs(template.FuncMap{
+	"problemLink": problemLink,
+}).Parse(`<!DOCTYPE html>
 <html>
 <head>
 <title>fixhub</title>
@@ -182,7 +194,7 @@ Find problems in <input id="repoText" placeholder="github.com/owner/repo" value=
 {{if .Problems}}
 <ul>
 {{range .Problems}}
-<li>{{.File}}: {{.Text}}</li>
+<li><a href="{{problemLink $ .}}">{{.File}}{{with .Line}}:{{.}}{{end}}</a>: {{.Text}}</li>
 {{end}}
 </ul>
 {{end}}
