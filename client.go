@@ -5,13 +5,21 @@ containing Go source files, and generating fixes for the problems.
 package fixhub
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"go/build"
 	"go/format"
 	"go/scanner"
+	"io/ioutil"
+	"log"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -30,7 +38,12 @@ type Client struct {
 	gc          *github.Client
 	owner, repo string
 
-	FetchParallelism int // max fetches to do at once in an operation
+	FetchParallelism int    // max fetches to do at once in an operation
+	ScratchDir       string // where we can scribble files; defaults to os.TempDir()
+
+	// VetBinary is the path to vet.
+	// If this is the empty string we try to find it under GOROOT.
+	VetBinary string
 }
 
 // NewClient returns a new client.
@@ -57,6 +70,13 @@ func NewClient(owner, repo, accessToken string) (*Client, error) {
 
 		FetchParallelism: 10,
 	}, nil
+}
+
+func (c *Client) tempDir() string {
+	if c.ScratchDir != "" {
+		return c.ScratchDir
+	}
+	return os.TempDir()
 }
 
 // ResolveRef resolves the given ref into the SHA-1 commit ID.
@@ -127,7 +147,16 @@ func (c *Client) Check(rev string) (Problems, error) {
 		return nil, fmt.Errorf("fetching tree %q (%s): %v", rev, ref, err)
 	}
 
-	// TODO: do more than lint
+	// Look for vet.
+	vet := c.VetBinary
+	if vet == "" {
+		vet = filepath.Join(build.ToolDir, "vet")
+		if _, err := os.Stat(vet); err != nil {
+			// don't care what the error is; silently ignore vet
+			log.Printf("XXX: vet stat: %v", err)
+			vet = ""
+		}
+	}
 
 	var (
 		linter = new(lint.Linter)
@@ -207,24 +236,79 @@ func (c *Client) Check(rev string) (Problems, error) {
 				})
 			}
 
-			ps, err := linter.Lint(path, src)
-			if err != nil {
-				//log.Printf("Linting %s: %v", path, err)
-				return
-			}
-			for _, p := range ps {
-				if p.Confidence < 0.8 { // TODO: flag
-					continue
+			if ps, err := linter.Lint(path, src); err == nil {
+				for _, p := range ps {
+					if p.Confidence < 0.8 { // TODO: flag
+						continue
+					}
+					addProblem(Problem{
+						File: path,
+						Line: p.Position.Line,
+						Text: p.Text,
+					})
 				}
-				addProblem(Problem{
-					File: path,
-					Line: p.Position.Line,
-					Text: p.Text,
-				})
+			}
+
+			if ps, err := c.vet(vet, path, src); err == nil {
+				for _, p := range ps {
+					addProblem(p)
+				}
 			}
 		}()
 	}
 	wg.Wait()
 	sort.Sort(Problems(problems.list))
 	return problems.list, nil
+}
+
+func (c *Client) vet(vet, filename string, content []byte) (Problems, error) {
+	// Vet does not support reading from standard input,
+	// so we write to a temporary directory and point vet at
+	// a source file we write there.
+	dir, err := ioutil.TempDir(c.tempDir(), "fixhub-vet")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+
+	src := filepath.Join(dir, "x.go")
+	if err := ioutil.WriteFile(src, content, 0660); err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command(
+		vet,
+		"-printfuncs=Debug:0,Debugf:0,Info:0,Infof:0,Warning:0,Warningf:0",
+		src)
+	// Ignore error if there's no output, because vet return status is inconsistent.
+	// https://code.google.com/p/go/issues/detail?id=4980
+	out, err := cmd.CombinedOutput()
+	if len(out) == 0 && err != nil {
+		// If there was no output then we probably couldn't execute vet at all.
+		return nil, fmt.Errorf("running vet: %v", err)
+	}
+
+	var ps Problems
+
+	scan := bufio.NewScanner(bytes.NewReader(out))
+	for scan.Scan() {
+		line := scan.Text()
+		// line looks like
+		//	x.go:301: unreachable code
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 || parts[0] != src {
+			continue
+		}
+		ln, err := strconv.Atoi(parts[1])
+		if err != nil {
+			continue // probably not a line number
+		}
+		text := strings.TrimSpace(parts[2])
+		ps = append(ps, Problem{
+			File: filename,
+			Line: ln,
+			Text: text,
+		})
+	}
+	return ps, nil
 }

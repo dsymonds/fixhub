@@ -26,7 +26,7 @@ func TestBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if len(ps) < 3 {
+	if len(ps) < 4 {
 		t.Fatalf("Didn't find enough problems")
 	}
 	if got, want := ps[0].Text, "This file needs formatting with gofmt."; got != want {
@@ -42,6 +42,13 @@ func TestBasic(t *testing.T) {
 		t.Errorf("ps[3].Text=%q, want it to mention missing closing brace", ps[3].Text)
 	}
 	if got, want := ps[3].Line, 3; got != want {
+		t.Errorf("Problem found at line %d, want %d", got, want)
+	}
+	// p3.go test: govet
+	if !strings.Contains(ps[4].Text, "printf verb") {
+		t.Errorf("ps[4].Text=%q, want it to mention %q", ps[4].Text, "printf verb")
+	}
+	if got, want := ps[4].Line, 6; got != want {
 		t.Errorf("Problem found at line %d, want %d", got, want)
 	}
 }
