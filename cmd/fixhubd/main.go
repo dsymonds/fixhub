@@ -15,12 +15,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"code.google.com/p/goauth2/oauth"
 
 	"github.com/dsymonds/fixhub"
 )
 
 var (
-	accessTokenFile = flag.String("access_token_file", filepath.Join(os.Getenv("HOME"), ".fixhub-token"), "a file containing a GitHub access token")
+	accessTokenFile = flag.String("access_token_file", filepath.Join(os.Getenv("HOME"), ".fixhub-token"), "path to GitHub personal access token for initial problem list")
+	clientID        = flag.String("oauth_client_id", "38f23a24eba500737cb5", "oauth client ID")
+	clientSecret    = flag.String("oauth_client_secret", "", "oauth client secret")
 	rev             = flag.String("rev", "master", "revision of the repo to check")
 	httpAddr        = flag.String("http", ":6061", "HTTP service address")
 )
@@ -29,6 +32,13 @@ var (
 	accessToken = ""
 	start       = time.Now()
 )
+
+var oauthConfig = &oauth.Config{
+	Scope:       "public_repo",
+	AuthURL:     "https://github.com/login/oauth/authorize",
+	TokenURL:    "https://github.com/login/oauth/access_token",
+	RedirectURL: "http://fixhub.org/oauthback",
+}
 
 func main() {
 	flag.Usage = func() {
@@ -47,15 +57,21 @@ func main() {
 		if fi.Mode()&0077 != 0 { // check that no group/world perm bits are set
 			log.Fatalf("%s is too accessible; run `chmod go= %s` to fix", *accessTokenFile, *accessTokenFile)
 		}
+
 		accessToken = string(bytes.TrimSpace(pat))
 	}
+
+	oauthConfig.ClientId = *clientID
+	oauthConfig.ClientSecret = *clientSecret
 
 	mainTextBuf := new(bytes.Buffer)
 	if err := problemsTmpl.Execute(mainTextBuf, Data{}); err != nil {
 		log.Fatal(err)
 	}
 
-	http.HandleFunc("/github.com/", fixhubHandler)
+	http.HandleFunc("/github.com/", problemList)
+	http.HandleFunc("/confirm", confirm)
+	http.HandleFunc("/oauthback", fix)
 	staticHandler("/style.css", styleText)
 	staticHandler("/script.js", scriptText)
 	staticHandler("/", mainTextBuf.String())
@@ -70,14 +86,16 @@ func staticHandler(name, text string) {
 }
 
 type Data struct {
-	Path     string
-	Rev      string
-	Owner    string
-	Repo     string
-	Problems fixhub.Problems
+	Path        string
+	Rev         string
+	Owner       string
+	Repo        string
+	Problems    fixhub.Problems
+	Fixable     bool // any of the problems are fixable
+	SkipConfirm bool
 }
 
-func fixhubHandler(w http.ResponseWriter, r *http.Request) {
+func problemList(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path[1:]
 	parts := strings.Split(path[len("github.com/"):], "/")
 	if len(parts) != 2 {
@@ -86,7 +104,16 @@ func fixhubHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	owner, repo := parts[0], parts[1]
 
-	client, err := fixhub.NewClient(owner, repo, accessToken)
+	var httpClient *http.Client
+	if accessToken != "" {
+		httpClient = (&oauth.Transport{
+			Token: &oauth.Token{
+				AccessToken: accessToken,
+			},
+		}).Client()
+	}
+
+	client, err := fixhub.NewClient(owner, repo, httpClient)
 	if err != nil {
 		errf(w, http.StatusBadRequest, "%v", err)
 		return
@@ -98,12 +125,24 @@ func fixhubHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	skipConfirm := false
+	if c, err := r.Cookie("skipconfirm"); err == nil && c.Value == "true" {
+		skipConfirm = true
+	}
+
 	data := Data{
-		Path:     path,
-		Rev:      *rev,
-		Owner:    owner,
-		Repo:     repo,
-		Problems: ps,
+		Path:        path,
+		Rev:         *rev,
+		Owner:       owner,
+		Repo:        repo,
+		Problems:    ps,
+		SkipConfirm: skipConfirm,
+	}
+	for _, p := range ps {
+		if p.Fixable {
+			data.Fixable = true
+			break
+		}
 	}
 
 	buf := new(bytes.Buffer)
@@ -111,6 +150,7 @@ func fixhubHandler(w http.ResponseWriter, r *http.Request) {
 		errf(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
+	w.Header().Set("Content-Type", "text/html")
 	io.Copy(w, buf)
 }
 
@@ -131,39 +171,13 @@ func errf(w http.ResponseWriter, code int, format string, a ...interface{}) {
 var errorTmpl = template.Must(template.New("error.html").Parse(`<!DOCTYPE html>
 <html>
 <head>
-<title>golint error {{.Code}}</title>
+<title>fixhub error {{.Code}}</title>
 </head>
 <body>
 {{.Text}}
 </body>
 </html>
 `))
-
-const styleText = `
-body {
-	font-family: Helvetica, Arial;
-}
-#header #repoText {
-	width: 350px;
-}
-#header {
-	font-size: 18pt;
-	margin: 0 auto;
-	width: 700px;
-}
-#header input {
-	font-family: Helvetica, Arial;
-	font-size: 18pt;
-}
-`
-
-const scriptText = `
-function goproblems() {
-	var path = document.forms[0].repoText.value;
-	window.location = window.location.origin + "/" + path;
-	return false;
-}
-`
 
 func problemLink(d Data, p fixhub.Problem) string {
 	url := "https://" + d.Path + "/blob/" + d.Rev + "/" + p.File
@@ -173,8 +187,32 @@ func problemLink(d Data, p fixhub.Problem) string {
 	return url
 }
 
+func fixLink(d Data, ps ...fixhub.Problem) string {
+	if len(ps) == 0 {
+		ps = d.Problems
+	}
+	var pToFix []fixhub.Problem
+	for _, p := range ps {
+		if p.Fixable {
+			pToFix = append(pToFix, p)
+		}
+	}
+	fixData := FixData{
+		Owner:    d.Owner,
+		Repo:     d.Repo,
+		Problems: pToFix,
+	}
+	key := datastore.Put(fixData)
+	if d.SkipConfirm {
+		return oauthConfig.AuthCodeURL(key)
+	} else {
+		return "/confirm?state=" + key
+	}
+}
+
 var problemsTmpl = template.Must(template.New("problems.html").Funcs(template.FuncMap{
 	"problemLink": problemLink,
+	"fixLink":     fixLink,
 }).Parse(`<!DOCTYPE html>
 <html>
 <head>
@@ -192,11 +230,19 @@ Find problems in <input id="repoText" placeholder="github.com/owner/repo" value=
 </div>
 
 {{if .Problems}}
+<div style="display:inline-block;">
 <ul>
 {{range .Problems}}
-<li><a href="{{problemLink $ .}}">{{.File}}{{with .Line}}:{{.}}{{end}}</a>: {{.Text}}</li>
+<li>
+<a href="{{problemLink $ .}}">{{.File}}{{with .Line}}:{{.}}{{end}}</a>: {{.Text}}
+{{if .Fixable}}<a style="float:right;" href="{{fixLink $ . }}">Fix</a>{{end}}
+</li>
 {{end}}
 </ul>
+<!--
+{{if .Fixable}}<a style="float:right;" href="{{fixLink .}}">Fix all</a>{{end}}
+-->
+</div>
 {{end}}
 </body>
 </html>

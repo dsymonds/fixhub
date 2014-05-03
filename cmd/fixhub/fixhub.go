@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"code.google.com/p/goauth2/oauth"
 	"github.com/dsymonds/fixhub"
 )
 
@@ -54,7 +56,16 @@ func main() {
 		accessToken = string(bytes.TrimSpace(pat))
 	}
 
-	client, err := fixhub.NewClient(owner, repo, accessToken)
+	var httpClient *http.Client
+	if accessToken != "" {
+		httpClient = (&oauth.Transport{
+			Token: &oauth.Token{
+				AccessToken: accessToken,
+			},
+		}).Client()
+	}
+
+	client, err := fixhub.NewClient(owner, repo, httpClient)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -70,3 +81,7 @@ func main() {
 	}
 	log.Printf("wow, there were %d problems!", len(ps))
 }
+
+/*
+	http.Redirect(w, r, config.AuthCodeURL("foo"), http.StatusFound)
+*/
